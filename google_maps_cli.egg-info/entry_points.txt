@@ -1,0 +1,2 @@
+[console_scripts]
+maps = google_maps_cli.cli:cli
