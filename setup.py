@@ -7,7 +7,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="google-maps-cli",
-    version="1.0.0",
+    version="1.1.0",
     author="Nitai Aharoni",
     description="Command-line interface for Google Maps Platform",
     long_description=long_description,
@@ -31,6 +31,7 @@ setup(
         "requests>=2.28.0",
         "google-auth>=2.0.0",
         "google-auth-oauthlib>=1.0.0",
+        "google-api-python-client>=2.0.0",
     ],
     entry_points={
         "console_scripts": [

@@ -14,7 +14,7 @@ from .utils import (
 
 
 @click.group(context_settings={"allow_interspersed_args": False})
-@click.version_option(version="1.0.0")
+@click.version_option(version="1.1.0")
 @click.option("--account", "-a", help="Account name to use (default: current default account)")
 @click.pass_context
 def cli(ctx, account):
