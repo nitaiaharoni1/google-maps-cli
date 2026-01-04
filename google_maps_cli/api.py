@@ -1,46 +1,78 @@
 """Google Maps Platform API wrapper."""
 
 import requests
-from .auth import get_api_key, check_auth
+from .auth import get_api_key, check_auth, get_oauth_credentials
 
 
 class MapsAPI:
     """Wrapper for Google Maps Platform API operations."""
     
     BASE_URL = "https://maps.googleapis.com/maps/api"
+    USER_DATA_BASE_URL = "https://www.googleapis.com"  # For user-specific data
     
-    def __init__(self, account=None):
+    def __init__(self, account=None, use_oauth=False):
         """
         Initialize Maps API client.
         
         Args:
             account: Account name (optional). If None, uses default account.
+            use_oauth: If True, use OAuth instead of API key
         """
-        self.api_key = check_auth(account)
-        if not self.api_key:
-            raise Exception("Not authenticated. Run 'maps init' first.")
         self.account = account
+        self.use_oauth = use_oauth
+        self.oauth_creds = None
+        self.api_key = None
+        
+        if use_oauth:
+            self.oauth_creds = check_auth(account, use_oauth=True)
+            if not self.oauth_creds:
+                raise Exception("Not authenticated with OAuth. Run 'maps init --oauth' first.")
+        else:
+            self.api_key = check_auth(account, use_oauth=False)
+            if not self.api_key:
+                # Try OAuth as fallback
+                self.oauth_creds = check_auth(account, use_oauth=True)
+                if not self.oauth_creds:
+                    raise Exception("Not authenticated. Run 'maps init' first.")
     
-    def _make_request(self, endpoint, params):
+    def _make_request(self, endpoint, params=None, use_user_data_api=False):
         """
         Make HTTP request to Google Maps API.
         
         Args:
             endpoint: API endpoint path (e.g., '/place/textsearch/json')
             params: Query parameters dict
+            use_user_data_api: If True, use user data API base URL
         
         Returns:
             JSON response data
         """
-        params["key"] = self.api_key
-        url = f"{self.BASE_URL}{endpoint}"
+        if params is None:
+            params = {}
+        
+        base_url = self.USER_DATA_BASE_URL if use_user_data_api else self.BASE_URL
+        url = f"{base_url}{endpoint}"
+        
+        headers = {}
+        
+        # Use OAuth if available
+        if self.oauth_creds:
+            if not self.oauth_creds.valid:
+                if self.oauth_creds.expired and self.oauth_creds.refresh_token:
+                    from google.auth.transport.requests import Request
+                    self.oauth_creds.refresh(Request())
+            headers["Authorization"] = f"Bearer {self.oauth_creds.token}"
+        else:
+            # Use API key
+            params["key"] = self.api_key
         
         try:
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, headers=headers, timeout=10)
             response.raise_for_status()
             data = response.json()
             
-            if data.get("status") not in ["OK", "ZERO_RESULTS"]:
+            # Check for API errors (Maps Platform format)
+            if not use_user_data_api and data.get("status") not in ["OK", "ZERO_RESULTS"]:
                 error_msg = data.get("error_message", "Unknown error")
                 status = data.get("status", "UNKNOWN_ERROR")
                 raise Exception(f"API Error ({status}): {error_msg}")
@@ -48,6 +80,39 @@ class MapsAPI:
             return data
         except requests.exceptions.RequestException as e:
             raise Exception(f"Request failed: {e}")
+    
+    def get_saved_places(self):
+        """
+        Get user's saved places/lists from Google Maps.
+        
+        Note: This endpoint may not exist. We'll try various possibilities.
+        
+        Returns:
+            List of saved places or lists
+        """
+        if not self.oauth_creds:
+            raise Exception("OAuth authentication required for accessing saved places. Run 'maps init --oauth' first.")
+        
+        # Try different possible endpoints
+        endpoints_to_try = [
+            "/maps/v1/savedPlaces",
+            "/maps/v1/user/savedPlaces",
+            "/maps/v1/lists",
+            "/maps/v1/user/lists",
+            "/maps/v1/places/saved",
+            "/userinfo/v2/me",  # Fallback to user info
+        ]
+        
+        for endpoint in endpoints_to_try:
+            try:
+                data = self._make_request(endpoint, use_user_data_api=True)
+                if data:
+                    return data
+            except Exception as e:
+                # Try next endpoint
+                continue
+        
+        raise Exception("Could not find API endpoint for saved places. This feature may not be available via API.")
     
     # Places API Methods
     

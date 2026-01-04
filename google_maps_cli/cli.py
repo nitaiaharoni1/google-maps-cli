@@ -5,7 +5,7 @@ import sys
 import json
 import webbrowser
 from urllib.parse import quote
-from .auth import authenticate, get_api_key, check_auth
+from .auth import authenticate, authenticate_oauth, get_api_key, check_auth
 from .api import MapsAPI
 from .utils import (
     list_accounts, get_default_account, set_default_account,
@@ -57,24 +57,72 @@ _account_option = click.option("--account", "-a", help="Account name to use (def
 @click.option("--account", "-a", help="Account name (optional, defaults to 'default')")
 def init(account):
     """Initialize and authenticate with Google Maps API."""
-    click.echo("🔐 Setting up Google Maps API authentication...")
-    api_key = authenticate(account)
+    click.echo("🔐 Google Maps CLI Setup\n")
     
-    if api_key:
-        try:
-            api = MapsAPI(account)
-            # Test the API key with a simple geocode request
-            test_result = api.geocode("New York")
-            if test_result:
-                click.echo(f"✅ Authentication successful!")
-                click.echo(f"   API key verified")
-                if account:
-                    click.echo(f"   Account name: {account}")
-        except Exception as e:
-            click.echo(f"⚠️  API key saved but verification failed: {e}")
-            click.echo("   Make sure the API key has the required APIs enabled.")
+    # Check what's available
+    from .utils import get_credentials_path
+    from .auth import OAUTH_AVAILABLE
+    
+    has_oauth_credentials = get_credentials_path() is not None
+    has_oauth_libs = OAUTH_AVAILABLE
+    
+    # Determine authentication method
+    if has_oauth_credentials and has_oauth_libs:
+        click.echo("Multiple authentication methods available:")
+        click.echo("  1. API Key (simple, for public data)")
+        click.echo("  2. OAuth 2.0 (for user-specific data like saved places)")
+        click.echo()
+        
+        choice = click.prompt(
+            "Choose authentication method",
+            type=click.Choice(['1', '2']),
+            default='1'
+        )
+        
+        use_oauth = (choice == '2')
+    elif has_oauth_credentials:
+        click.echo("⚠️  OAuth credentials found but libraries not installed.")
+        click.echo("Install with: pip install google-auth google-auth-oauthlib google-api-python-client")
+        click.echo()
+        click.echo("Using API Key authentication instead...")
+        use_oauth = False
     else:
-        sys.exit(1)
+        click.echo("Using API Key authentication...")
+        click.echo("(For user-specific features like saved places, you'll need OAuth credentials)")
+        use_oauth = False
+    
+    click.echo()
+    
+    if use_oauth:
+        click.echo("Setting up OAuth 2.0 authentication...")
+        creds = authenticate_oauth(account)
+        if creds:
+            click.echo(f"✅ OAuth authentication successful!")
+            if account:
+                click.echo(f"   Account name: {account}")
+            click.echo("\n💡 You can now use: maps lists")
+        else:
+            sys.exit(1)
+    else:
+        click.echo("Setting up API Key authentication...")
+        api_key = authenticate(account)
+        
+        if api_key:
+            try:
+                api = MapsAPI(account)
+                # Test the API key with a simple geocode request
+                test_result = api.geocode("New York")
+                if test_result:
+                    click.echo(f"✅ Authentication successful!")
+                    click.echo(f"   API key verified")
+                    if account:
+                        click.echo(f"   Account name: {account}")
+                    click.echo("\n💡 Try: maps search 'restaurants near me'")
+            except Exception as e:
+                click.echo(f"⚠️  API key saved but verification failed: {e}")
+                click.echo("   Make sure the API key has the required APIs enabled.")
+        else:
+            sys.exit(1)
 
 
 @cli.command()
@@ -119,11 +167,32 @@ def me(ctx, account):
     """Show authenticated account information."""
     account = account or ctx.obj.get("ACCOUNT")
     try:
-        api_key = check_auth(account)
+        from .auth import get_oauth_credentials, get_api_key
+        
+        # Check for OAuth first
+        oauth_creds = get_oauth_credentials(account)
+        if oauth_creds:
+            click.echo(f"🔐 OAuth 2.0 configured")
+            click.echo(f"   Account: {account or 'default'}")
+            click.echo(f"   Token: {oauth_creds.token[:20]}...")
+            if oauth_creds.expired:
+                click.echo(f"   Status: Expired (will auto-refresh)")
+            else:
+                click.echo(f"   Status: Valid")
+        
+        # Check for API key
+        api_key = get_api_key(account)
         if api_key:
-            click.echo(f"🔑 API Key configured")
+            if oauth_creds:
+                click.echo(f"\n🔑 API Key also configured")
+            else:
+                click.echo(f"🔑 API Key configured")
             click.echo(f"   Account: {account or 'default'}")
             click.echo(f"   Key: {api_key[:20]}...")
+        
+        if not oauth_creds and not api_key:
+            click.echo("⚠️  No authentication configured.")
+            click.echo("   Run 'maps init' for API key or 'maps init --oauth' for OAuth.")
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
         sys.exit(1)
@@ -718,6 +787,71 @@ def open(ctx, location, account):
     
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option("--json-output", is_flag=True, help="Output as JSON")
+@_account_option
+@click.pass_context
+def lists(ctx, json_output, account):
+    """List all your saved Google Maps lists/places (requires OAuth)."""
+    account = account or ctx.obj.get("ACCOUNT")
+    try:
+        api = MapsAPI(account, use_oauth=True)
+        saved_data = api.get_saved_places()
+        
+        if json_output:
+            click.echo(json.dumps(saved_data, indent=2))
+            return
+        
+        # Try to parse and display the data
+        if isinstance(saved_data, dict):
+            if "items" in saved_data:
+                items = saved_data["items"]
+            elif "lists" in saved_data:
+                items = saved_data["lists"]
+            elif "savedPlaces" in saved_data:
+                items = saved_data["savedPlaces"]
+            elif "places" in saved_data:
+                items = saved_data["places"]
+            else:
+                # Display raw data structure
+                click.echo("📋 Saved Places Data:")
+                click.echo(json.dumps(saved_data, indent=2))
+                return
+        elif isinstance(saved_data, list):
+            items = saved_data
+        else:
+            click.echo("📋 Saved Places Data:")
+            click.echo(json.dumps(saved_data, indent=2))
+            return
+        
+        if not items:
+            click.echo("No saved places found.")
+            return
+        
+        click.echo(f"Found {len(items)} saved items:\n")
+        for i, item in enumerate(items, 1):
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("title") or item.get("displayName") or "Unnamed"
+                place_id = item.get("place_id") or item.get("placeId") or ""
+                address = item.get("formatted_address") or item.get("address") or ""
+                
+                click.echo(f"{i}. {name}")
+                if place_id:
+                    click.echo(f"   Place ID: {place_id}")
+                if address:
+                    click.echo(f"   Address: {address}")
+                click.echo()
+            else:
+                click.echo(f"{i}. {item}")
+                click.echo()
+    
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        click.echo("\nNote: This feature requires OAuth authentication.")
+        click.echo("Run 'maps init --oauth' to set up OAuth.")
         sys.exit(1)
 
 

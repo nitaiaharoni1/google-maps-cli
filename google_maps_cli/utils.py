@@ -85,6 +85,17 @@ def get_credentials_path():
     return None
 
 
+def get_token_path(account=None):
+    """Get the path to OAuth token file for a specific account."""
+    if account is None:
+        account = get_default_account()
+    
+    if account:
+        return Path.home() / f".google_maps_token_{account}.json"
+    else:
+        return Path.home() / ".google_maps_token.json"
+
+
 def ensure_token_permissions(token_path):
     """Ensure token file has secure permissions (600)."""
     if token_path.exists():
