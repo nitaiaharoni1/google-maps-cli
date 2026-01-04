@@ -7,7 +7,7 @@ class GoogleMaps < Formula
   homepage "https://github.com/nitaiaharoni1/google-maps-cli"
   url "https://github.com/nitaiaharoni1/google-maps-cli/archive/refs/tags/v1.0.0.tar.gz"
   version "1.0.0"
-  sha256 "PLACEHOLDER_SHA256"
+  sha256 "45701e0cdcd5aadf7e221a40a0b2295e4e06338022ac1cd787324b86ccac4a2e"
   license "MIT"
   head "https://github.com/nitaiaharoni1/google-maps-cli.git", branch: "main"
 
